@@ -8,13 +8,18 @@ Grammar for Ronix v0.1 (EBNF-ish):
 
     program     := statement* EOF
 
-    statement   := let_stmt | show_stmt | when_stmt
+    statement   := let_stmt | show_stmt | when_stmt | repeat_stmt | while_stmt
+                 | stop_stmt | use_stmt
     let_stmt    := LET IDENTIFIER ASSIGN expression NEWLINE
     show_stmt   := SHOW "(" expression ")" NEWLINE
-    when_stmt   := WHEN expression NEWLINE
+    when_stmt   := WHEN expression ";" NEWLINE
                    block
-                   ("otherwise" NEWLINE block)?
+                   ("otherwise" ";" NEWLINE block)?
                    "end" NEWLINE
+    repeat_stmt := REPEAT expression? ";" NEWLINE block "end" NEWLINE
+    while_stmt  := WHILE expression ";" NEWLINE block "end" NEWLINE
+    stop_stmt   := STOP NEWLINE
+    use_stmt    := USE IDENTIFIER NEWLINE
 
     block       := statement*     (stops at 'otherwise', 'end', or EOF)
 
@@ -24,7 +29,8 @@ Grammar for Ronix v0.1 (EBNF-ish):
     term        := factor (("*" | "/") factor)*
     factor      := NUMBER
                  | STRING
-                 | "yes" | "no"
+                 | "on" | "off"
+                 | "ask" "(" expression? ")"
                  | IDENTIFIER
                  | "-" factor
                  | "(" expression ")"
@@ -36,6 +42,17 @@ Note: comparisons are intentionally non-chaining (`a < b < c` is not
 supported) to keep v0.1 simple and unambiguous. Since `show(...)` now
 uses `(`/`)` (shared with grouping parens) rather than `<`/`>`, it can
 safely hold a full expression, comparisons included.
+
+`repeat` with no count expression loops forever until a `stop`
+statement runs inside it (or inside a nested `when`). `stop` only
+makes sense inside a `repeat`/`while` body; the Interpreter is what
+enforces that (a `stop` outside any loop is a runtime error, not a
+parse error, since parsing has no notion of "inside a loop").
+
+Every block-opening header line (`when ...`, `otherwise`, `repeat ...`,
+`while ...`) must end with `;` — this is Ronix's equivalent of
+Python's trailing `:` on `if`/`while`/`for` lines. `end` closes the
+block itself and does not take a `;`.
 
 Each parsing method consumes exactly the tokens for the grammar rule
 it represents and returns the corresponding AST node. Errors raise
@@ -49,9 +66,14 @@ from ast_nodes import (
     LetStatement,
     ShowStatement,
     WhenStatement,
+    RepeatStatement,
+    WhileStatement,
+    StopStatement,
+    UseStatement,
     NumberLiteral,
     StringLiteral,
     BooleanLiteral,
+    AskExpression,
     Identifier,
     BinaryOp,
     UnaryOp,
@@ -126,6 +148,14 @@ class Parser:
             return self._show_statement()
         if self._check(TokenType.WHEN):
             return self._when_statement()
+        if self._check(TokenType.REPEAT):
+            return self._repeat_statement()
+        if self._check(TokenType.WHILE):
+            return self._while_statement()
+        if self._check(TokenType.STOP):
+            return self._stop_statement()
+        if self._check(TokenType.USE):
+            return self._use_statement()
 
         token = self._current()
         raise RonixSyntaxError(
@@ -150,22 +180,64 @@ class Parser:
         self._end_statement()
         return ShowStatement(value, show_token.line, show_token.column)
 
+    def _expect_header_end(self, context: str):
+        """Every block-opening header (when/otherwise/repeat/while) must end
+        with ';' — Ronix's equivalent of Python's trailing ':'."""
+        self._expect(TokenType.SEMICOLON, f"Expected ';' after {context} (Ronix uses ';' where Python uses ':')")
+        self._expect(TokenType.NEWLINE, "Expected end of line after ';'")
+
     def _when_statement(self):
         when_token = self._expect(TokenType.WHEN, "Expected 'when'")
         condition = self._expression()
-        self._expect(TokenType.NEWLINE, "Expected end of line after 'when' condition")
+        self._expect_header_end("'when' condition")
 
         then_branch = self._block(stop_types=(TokenType.OTHERWISE, TokenType.END))
 
         otherwise_branch = None
         if self._match(TokenType.OTHERWISE):
-            self._expect(TokenType.NEWLINE, "Expected end of line after 'otherwise'")
+            self._expect_header_end("'otherwise'")
             otherwise_branch = self._block(stop_types=(TokenType.END,))
 
         self._expect(TokenType.END, "Expected 'end' to close 'when' block")
         self._end_statement()
 
         return WhenStatement(condition, then_branch, otherwise_branch, when_token.line, when_token.column)
+
+    def _repeat_statement(self):
+        repeat_token = self._expect(TokenType.REPEAT, "Expected 'repeat'")
+
+        count = None
+        if not self._check(TokenType.SEMICOLON):
+            count = self._expression()
+        self._expect_header_end("'repeat'")
+
+        body = self._block(stop_types=(TokenType.END,))
+        self._expect(TokenType.END, "Expected 'end' to close 'repeat' block")
+        self._end_statement()
+
+        return RepeatStatement(count, body, repeat_token.line, repeat_token.column)
+
+    def _while_statement(self):
+        while_token = self._expect(TokenType.WHILE, "Expected 'while'")
+        condition = self._expression()
+        self._expect_header_end("'while' condition")
+
+        body = self._block(stop_types=(TokenType.END,))
+        self._expect(TokenType.END, "Expected 'end' to close 'while' block")
+        self._end_statement()
+
+        return WhileStatement(condition, body, while_token.line, while_token.column)
+
+    def _stop_statement(self):
+        stop_token = self._expect(TokenType.STOP, "Expected 'stop'")
+        self._end_statement()
+        return StopStatement(stop_token.line, stop_token.column)
+
+    def _use_statement(self):
+        use_token = self._expect(TokenType.USE, "Expected 'use'")
+        name_token = self._expect(TokenType.IDENTIFIER, "Expected a module name after 'use'")
+        self._end_statement()
+        return UseStatement(name_token.value, use_token.line, use_token.column)
 
     def _block(self, stop_types):
         """Parse statements until one of stop_types (or EOF) is reached.
@@ -242,13 +314,22 @@ class Parser:
             self._advance()
             return StringLiteral(token.value, token.line, token.column)
 
-        if token.type == TokenType.YES:
+        if token.type == TokenType.ON:
             self._advance()
             return BooleanLiteral(True, token.line, token.column)
 
-        if token.type == TokenType.NO:
+        if token.type == TokenType.OFF:
             self._advance()
             return BooleanLiteral(False, token.line, token.column)
+
+        if token.type == TokenType.ASK:
+            self._advance()
+            self._expect(TokenType.LPAREN, "Expected '(' after 'ask'")
+            prompt = None
+            if not self._check(TokenType.RPAREN):
+                prompt = self._expression()
+            self._expect(TokenType.RPAREN, "Expected ')' to close 'ask(...)'")
+            return AskExpression(prompt, token.line, token.column)
 
         if token.type == TokenType.IDENTIFIER:
             self._advance()
