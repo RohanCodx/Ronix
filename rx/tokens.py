@@ -38,8 +38,13 @@ class TokenType(Enum):
     WHEN = auto()          # 'when'
     OTHERWISE = auto()      # 'otherwise'
     END = auto()             # 'end'
-    YES = auto()              # 'yes'  (boolean literal, true)
-    NO = auto()                # 'no'   (boolean literal, false)
+    ON = auto()               # 'on'    (boolean literal, true)
+    OFF = auto()               # 'off'   (boolean literal, false)
+    REPEAT = auto()              # 'repeat'  (counted or infinite loop)
+    WHILE = auto()                # 'while'   (conditional loop)
+    STOP = auto()                   # 'stop'    (break out of a loop)
+    USE = auto()                     # 'use'     (import a stdlib module)
+    ASK = auto()                      # 'ask'     (read user input, as an expression)
 
     # ----- Operators -----
     PLUS = auto()          # +
@@ -59,6 +64,7 @@ class TokenType(Enum):
     # ----- Punctuation -----
     LPAREN = auto()          # (   (grouped expressions AND show(...))
     RPAREN = auto()          # )
+    SEMICOLON = auto()        # ;   (ends a block header line: when/otherwise/repeat/while)
 
     # ----- Structural / control tokens -----
     NEWLINE = auto()          # marks the end of a statement
@@ -74,8 +80,13 @@ KEYWORDS = {
     "when": TokenType.WHEN,
     "otherwise": TokenType.OTHERWISE,
     "end": TokenType.END,
-    "yes": TokenType.YES,
-    "no": TokenType.NO,
+    "on": TokenType.ON,
+    "off": TokenType.OFF,
+    "repeat": TokenType.REPEAT,
+    "while": TokenType.WHILE,
+    "stop": TokenType.STOP,
+    "use": TokenType.USE,
+    "ask": TokenType.ASK,
 }
 
 
