@@ -22,19 +22,33 @@ Design notes:
     string form (numbers print without unnecessary float noise).
 """
 
+import os
+import datetime as _datetime
+
 from ast_nodes import (
     Program,
     LetStatement,
     ShowStatement,
     WhenStatement,
+    RepeatStatement,
+    WhileStatement,
+    StopStatement,
+    UseStatement,
     NumberLiteral,
     StringLiteral,
     BooleanLiteral,
+    AskExpression,
     Identifier,
     BinaryOp,
     UnaryOp,
 )
 from errors import RonixNameError, RonixTypeError, RonixZeroDivisionError, RonixRuntimeError
+
+
+class _StopLoop(Exception):
+    """Internal control-flow signal for the 'stop' statement (break).
+    Never surfaces to Ronix code — caught by the nearest enclosing
+    RepeatStatement/WhileStatement executor."""
 
 
 class Environment:
@@ -107,6 +121,93 @@ class Interpreter:
             for statement in node.otherwise_branch:
                 self._execute(statement)
 
+    def _exec_RepeatStatement(self, node: RepeatStatement):
+        try:
+            if node.count is None:
+                # Bare 'repeat' with no count: loops forever until 'stop'.
+                while True:
+                    for statement in node.body:
+                        self._execute(statement)
+            else:
+                count_value = self._evaluate(node.count)
+                if not self._is_number(count_value):
+                    raise RonixTypeError(
+                        f"'repeat' count must be a number, got {self._type_name(count_value)}",
+                        node.line,
+                        node.column,
+                    )
+                for _ in range(int(count_value)):
+                    for statement in node.body:
+                        self._execute(statement)
+        except _StopLoop:
+            pass
+
+    def _exec_WhileStatement(self, node: WhileStatement):
+        try:
+            while self._is_truthy(self._evaluate(node.condition)):
+                for statement in node.body:
+                    self._execute(statement)
+        except _StopLoop:
+            pass
+
+    def _exec_StopStatement(self, node: StopStatement):
+        raise _StopLoop()
+
+    # A small set of modules implemented directly in Python, since Ronix
+    # v0.1 has no functions of its own to reach the system clock, files,
+    # etc. `use <name>` checks this table first; anything not listed here
+    # falls back to loading stdlib/<name>.rx as plain Ronix source.
+    def _native_modules(self):
+        return {
+            "datetime": self._load_native_datetime,
+        }
+
+    def _load_native_datetime(self, node: UseStatement):
+        """Populates the global scope with the current date/time as of
+        the moment 'use datetime' runs. Ronix has no objects/namespacing
+        yet, so these come in as flat, plain variables rather than
+        fields on a 'datetime' value."""
+        now = _datetime.datetime.now()
+        self.globals.define("year", now.year)
+        self.globals.define("month", now.month)
+        self.globals.define("day", now.day)
+        self.globals.define("hour", now.hour)
+        self.globals.define("minute", now.minute)
+        self.globals.define("second", now.second)
+        self.globals.define("now", now.strftime("%Y-%m-%d %H:%M:%S"))
+        self.globals.define("today", now.strftime("%Y-%m-%d"))
+
+    def _exec_UseStatement(self, node: UseStatement):
+        native = self._native_modules().get(node.name)
+        if native is not None:
+            native(node)
+            return
+
+        # Lazy imports to avoid a module-level import cycle (lexer/parser
+        # don't import runtime, but importing them at module scope here
+        # would run before those modules are fully defined during startup
+        # in some import orders — importing inside the method sidesteps that).
+        from lexer import Lexer
+        from parser import Parser
+
+        stdlib_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "stdlib")
+        module_path = os.path.join(stdlib_dir, f"{node.name}.rx")
+
+        if not os.path.isfile(module_path):
+            raise RonixRuntimeError(
+                f"Module '{node.name}' not found (looked for {os.path.normpath(module_path)})",
+                node.line,
+                node.column,
+            )
+
+        with open(module_path, "r", encoding="utf-8") as f:
+            source = f.read()
+
+        tokens = Lexer(source).tokenize()
+        module_program = Parser(tokens).parse()
+        for statement in module_program.statements:
+            self._execute(statement)
+
     # ------------------------------------------------------------------
     # Expression evaluation
     # ------------------------------------------------------------------
@@ -126,6 +227,18 @@ class Interpreter:
 
     def _eval_BooleanLiteral(self, node: BooleanLiteral):
         return node.value
+
+    def _eval_AskExpression(self, node: AskExpression):
+        prompt_text = ""
+        if node.prompt is not None:
+            prompt_value = self._evaluate(node.prompt)
+            prompt_text = self._stringify(prompt_value)
+        try:
+            return input(prompt_text)
+        except EOFError:
+            # No more input available (e.g. piped input ran out) — treat as
+            # an empty response rather than crashing the interpreter.
+            return ""
 
     def _eval_Identifier(self, node: Identifier):
         return self.globals.get(node.name, node.line, node.column)
@@ -245,7 +358,7 @@ class Interpreter:
     @staticmethod
     def _stringify(value) -> str:
         if isinstance(value, bool):
-            return "yes" if value else "no"
+            return "on" if value else "off"
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
