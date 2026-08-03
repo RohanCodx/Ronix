@@ -106,6 +106,68 @@ class WhenStatement(Node):
         )
 
 
+class RepeatStatement(Node):
+    """A counted or infinite loop:
+
+        repeat 10
+            <body>
+        end
+
+        repeat            (no count -> loops forever, until 'stop')
+            <body>
+        end
+
+    `count` is `None` for the bare infinite form.
+    """
+
+    def __init__(self, count, body, line=None, column=None):
+        super().__init__(line, column)
+        self.count = count
+        self.body = body
+
+    def __repr__(self):
+        return f"RepeatStatement(count={self.count!r}, body={self.body!r})"
+
+
+class WhileStatement(Node):
+    """A conditional loop:
+
+        while <condition>
+            <body>
+        end
+    """
+
+    def __init__(self, condition, body, line=None, column=None):
+        super().__init__(line, column)
+        self.condition = condition
+        self.body = body
+
+    def __repr__(self):
+        return f"WhileStatement(condition={self.condition!r}, body={self.body!r})"
+
+
+class StopStatement(Node):
+    """Breaks out of the nearest enclosing 'repeat' or 'while' loop."""
+
+    def __repr__(self):
+        return "StopStatement()"
+
+
+class UseStatement(Node):
+    """Imports a stdlib module by name: `use <name>`.
+
+    The Interpreter loads and runs stdlib/<name>.rx into the current
+    global scope.
+    """
+
+    def __init__(self, name: str, line=None, column=None):
+        super().__init__(line, column)
+        self.name = name
+
+    def __repr__(self):
+        return f"UseStatement(name={self.name!r})"
+
+
 # ----------------------------------------------------------------------
 # Expressions
 # ----------------------------------------------------------------------
@@ -133,7 +195,7 @@ class StringLiteral(Node):
 
 
 class BooleanLiteral(Node):
-    """A boolean literal: `yes` (true) or `no` (false)."""
+    """A boolean literal: `on` (true) or `off` (false)."""
 
     def __init__(self, value: bool, line=None, column=None):
         super().__init__(line, column)
@@ -141,6 +203,21 @@ class BooleanLiteral(Node):
 
     def __repr__(self):
         return f"BooleanLiteral({self.value!r})"
+
+
+class AskExpression(Node):
+    """Reads a line of user input, as an expression: `ask("Prompt: ")`.
+
+    Always evaluates to a string. `prompt` is `None` for the bare
+    `ask()` form (no prompt text printed before reading).
+    """
+
+    def __init__(self, prompt, line=None, column=None):
+        super().__init__(line, column)
+        self.prompt = prompt
+
+    def __repr__(self):
+        return f"AskExpression(prompt={self.prompt!r})"
 
 
 class Identifier(Node):
