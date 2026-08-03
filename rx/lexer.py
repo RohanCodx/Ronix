@@ -155,6 +155,9 @@ class Lexer:
         if ch == ")":
             self._add_token(TokenType.RPAREN, ")", start_line, start_col)
             return
+        if ch == ";":
+            self._add_token(TokenType.SEMICOLON, ";", start_line, start_col)
+            return
 
         raise RonixSyntaxError(f"Unexpected character '{ch}'", start_line, start_col)
 
